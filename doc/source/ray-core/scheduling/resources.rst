@@ -12,6 +12,8 @@ A resource in Ray is a key-value pair where the key denotes a resource name, and
 For convenience, Ray has native support for CPU, GPU, and memory resource types; CPU, GPU and memory are called **pre-defined resources**.
 Besides those, Ray also supports :ref:`custom resources <custom-resources>`.
 
+.. _logical-resources:
+
 Physical Resources and Logical Resources
 ----------------------------------------
 
@@ -54,57 +56,71 @@ Some use cases for custom resources:
   For this use case, the actual quantity doesn't matter, and the convention is to specify a tiny number so that the label resource is
   not the limiting factor for parallelism.
 
+.. _specify-node-resources:
+
 Specifying Node Resources
 -------------------------
 
-By default, Ray nodes start with pre-defiend CPU, GPU, and memory resources. The quantities of these resources on each node are set to the physical quantities auto detected by Ray.
-For example, if you start a head node with ``ray start --head`` then the quantity of logical CPU resources will be equal to the number of physical CPUs on the machine.
+By default, Ray nodes start with pre-defined CPU, GPU, and memory resources. The quantities of these resources on each node are set to the physical quantities auto detected by Ray.
+By default, logical resources are configured by the following rule.
+
+.. warning::
+
+    Ray **does not permit dynamic updates of resource capacities after Ray has been started on a node**.
+
+- **Number of logical CPUs (``num_cpus``)**: Set to the number of CPUs of the machine/container.
+- **Number of logical GPUs (``num_gpus)**: Set to the number of GPUs of the machine/container.
+- **Memory (``memory``)**: Set to 70% of "available memory" when ray runtime starts.
+- **Object Store Memory (``object_store_memory``)**: Set to 30% of "available memory" when ray runtime starts. Note that the object store memory is not logical resource, and users cannot use it for scheduling.
+
 However, you can always override that by manually specifying the quantities of pre-defined resources and adding custom resources.
 There are several ways to do that depending on how you start the Ray cluster:
 
-.. tabbed:: ray.init()
+.. tab-set::
 
-    If you are using :ref:`ray.init() <ray-init-ref>` to start a single node Ray cluster, you can do the following to manually specify node resources:
+    .. tab-item:: ray.init()
 
-    .. literalinclude:: ../doc_code/resources.py
-        :language: python
-        :start-after: __specifying_node_resources_start__
-        :end-before: __specifying_node_resources_end__
+        If you are using :func:`ray.init() <ray.init>` to start a single node Ray cluster, you can do the following to manually specify node resources:
 
-.. tabbed:: ray start
+        .. literalinclude:: ../doc_code/resources.py
+            :language: python
+            :start-after: __specifying_node_resources_start__
+            :end-before: __specifying_node_resources_end__
 
-    If you are using :ref:`ray start <ray-start-doc>` to start a Ray node, you can run:
+    .. tab-item:: ray start
 
-    .. code-block:: shell
+        If you are using :ref:`ray start <ray-start-doc>` to start a Ray node, you can run:
 
-        ray start --head --num-cpus=3 --num-gpus=4 --resources='{"special_hardware": 1, "custom_label": 1}'
+        .. code-block:: shell
 
-.. tabbed:: ray up
+            ray start --head --num-cpus=3 --num-gpus=4 --resources='{"special_hardware": 1, "custom_label": 1}'
 
-    If you are using :ref:`ray up <ray-up-doc>` to start a Ray cluster, you can set the :ref:`resources field <cluster-configuration-resources-type>` in the yaml file:
+    .. tab-item:: ray up
 
-    .. code-block:: yaml
+        If you are using :ref:`ray up <ray-up-doc>` to start a Ray cluster, you can set the :ref:`resources field <cluster-configuration-resources-type>` in the yaml file:
 
-        available_node_types:
-          head:
-            ...
-            resources:
-              CPU: 3
-              GPU: 4
-              special_hardware: 1
-              custom_label: 1
+        .. code-block:: yaml
 
-.. tabbed:: KubeRay
+            available_node_types:
+              head:
+                ...
+                resources:
+                  CPU: 3
+                  GPU: 4
+                  special_hardware: 1
+                  custom_label: 1
 
-    If you are using :ref:`KubeRay <kuberay-index>` to start a Ray cluster, you can set the :ref:`rayStartParams field <rayStartParams>` in the yaml file:
+    .. tab-item:: KubeRay
 
-    .. code-block:: yaml
+        If you are using :ref:`KubeRay <kuberay-index>` to start a Ray cluster, you can set the :ref:`rayStartParams field <rayStartParams>` in the yaml file:
 
-        headGroupSpec:
-          rayStartParams:
-            num-cpus: "3"
-            num-gpus: "4"
-            resources: '"{\"special_hardware\": 1, \"custom_label\": 1}"'
+        .. code-block:: yaml
+
+            headGroupSpec:
+              rayStartParams:
+                num-cpus: "3"
+                num-gpus: "4"
+                resources: '"{\"special_hardware\": 1, \"custom_label\": 1}"'
 
 
 .. _resource-requirements:
@@ -122,37 +138,42 @@ The default resource requirements for actors was chosen for historical reasons.
 It's recommended to always explicitly set ``num_cpus`` for actors to avoid any surprises.
 If resources are specified explicitly, they are required for both scheduling and running.)
 
-You can also explicitly specify a task's or actor's resource requirements (for example, one task may require a GPU) instead of using default ones via :ref:`ray.remote() <ray-remote-ref>` and :ref:`.options() <ray-options-ref>`.
+You can also explicitly specify a task's or actor's resource requirements (for example, one task may require a GPU) instead of using default ones via :func:`ray.remote() <ray.remote>`
+and :meth:`task.options() <ray.remote_function.RemoteFunction.options>`/:meth:`actor.options() <ray.actor.ActorClass.options>`.
 
-.. tabbed:: Python
+.. tab-set::
 
-    .. literalinclude:: ../doc_code/resources.py
-        :language: python
-        :start-after: __specifying_resource_requirements_start__
-        :end-before: __specifying_resource_requirements_end__
+    .. tab-item:: Python
 
-.. tabbed:: Java
+        .. literalinclude:: ../doc_code/resources.py
+            :language: python
+            :start-after: __specifying_resource_requirements_start__
+            :end-before: __specifying_resource_requirements_end__
 
-    .. code-block:: java
+    .. tab-item:: Java
 
-        // Specify required resources.
-        Ray.task(MyRayApp::myFunction).setResource("CPU", 1.0).setResource("GPU", 1.0).setResource("special_hardware", 1.0).remote();
+        .. code-block:: java
 
-        Ray.actor(Counter::new).setResource("CPU", 2.0).setResource("GPU", 1.0).remote();
+            // Specify required resources.
+            Ray.task(MyRayApp::myFunction).setResource("CPU", 1.0).setResource("GPU", 1.0).setResource("special_hardware", 1.0).remote();
 
-.. tabbed:: C++
+            Ray.actor(Counter::new).setResource("CPU", 2.0).setResource("GPU", 1.0).remote();
 
-    .. code-block:: c++
+    .. tab-item:: C++
 
-        // Specify required resources.
-        ray::Task(MyFunction).SetResource("CPU", 1.0).SetResource("GPU", 1.0).SetResource("special_hardware", 1.0).Remote();
+        .. code-block:: c++
 
-        ray::Actor(CreateCounter).SetResource("CPU", 2.0).SetResource("GPU", 1.0).Remote();
+            // Specify required resources.
+            ray::Task(MyFunction).SetResource("CPU", 1.0).SetResource("GPU", 1.0).SetResource("special_hardware", 1.0).Remote();
+
+            ray::Actor(CreateCounter).SetResource("CPU", 2.0).SetResource("GPU", 1.0).Remote();
 
 Task and actor resource requirements have implications for the Ray's scheduling concurrency.
 In particular, the sum of the resource requirements of all of the
 concurrently executing tasks and actors on a given node cannot exceed the node's total resources.
 This property can be used to :ref:`limit the number of concurrently running tasks or actors to avoid issues like OOM <core-patterns-limit-running-tasks>`.
+
+.. _fractional-resource-requirements:
 
 Fractional Resource Requirements
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

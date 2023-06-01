@@ -7,6 +7,7 @@ from typing import Dict
 import pytest
 
 import ray
+from ray._private.utils import get_or_create_event_loop
 from ray.serve._private.common import EndpointTag, EndpointInfo, RunningReplicaInfo
 from ray.serve._private.long_poll import (
     LongPollClient,
@@ -125,7 +126,7 @@ async def test_client(serve_instance):
             "key_1": key_1_callback,
             "key_2": key_2_callback,
         },
-        call_in_event_loop=asyncio.get_event_loop(),
+        call_in_event_loop=get_or_create_event_loop(),
     )
 
     while len(client.object_snapshots) == 0:
@@ -162,7 +163,7 @@ async def test_client_threadsafe(serve_instance):
         {
             "key_1": key_1_callback,
         },
-        call_in_event_loop=asyncio.get_event_loop(),
+        call_in_event_loop=get_or_create_event_loop(),
     )
 
     await e.wait()
@@ -181,8 +182,8 @@ def test_listen_for_change_java(serve_instance):
     assert poll_result_1.updated_objects["key_1"].object_snapshot.decode() == "999"
     request_2 = {"keys_to_snapshot_ids": {"ROUTE_TABLE": -1}}
     endpoints: Dict[EndpointTag, EndpointInfo] = dict()
-    endpoints["deployment_name"] = EndpointInfo(route="/test/xlang/poll")
-    endpoints["deployment_name1"] = EndpointInfo(route="/test/xlang/poll1")
+    endpoints["deployment_name"] = EndpointInfo(route="/test/xlang/poll", app_name="")
+    endpoints["deployment_name1"] = EndpointInfo(route="/test/xlang/poll1", app_name="")
     ray.get(host.notify_changed.remote(LongPollNamespace.ROUTE_TABLE, endpoints))
     object_ref_2 = host.listen_for_change_java.remote(
         LongPollRequest(**request_2).SerializeToString()

@@ -14,10 +14,10 @@ from ray.tune.execution.placement_groups import (
     PlacementGroupFactory,
     resource_dict_to_pg_factory,
 )
+from ray.air._internal.uri_utils import URI
+from ray.air.config import ScalingConfig
 from ray.tune.registry import _ParameterRegistry
-from ray.tune.resources import Resources
 from ray.tune.utils import _detect_checkpoint_function
-from ray.util import placement_group
 from ray.util.annotations import DeveloperAPI, PublicAPI
 
 if TYPE_CHECKING:
@@ -40,27 +40,6 @@ class TrainableUtil:
     def load_metadata(checkpoint_dir: str) -> Dict:
         with open(os.path.join(checkpoint_dir, _TUNE_METADATA_FILENAME), "rb") as f:
             return pickle.load(f)
-
-    @staticmethod
-    def pickle_checkpoint(checkpoint_path: str):
-        """Pickles checkpoint data."""
-        checkpoint_dir = TrainableUtil.find_checkpoint_dir(checkpoint_path)
-        data = {}
-        for basedir, _, file_names in os.walk(checkpoint_dir):
-            for file_name in file_names:
-                path = os.path.join(basedir, file_name)
-                with open(path, "rb") as f:
-                    data[os.path.relpath(path, checkpoint_dir)] = f.read()
-        # Use normpath so that a directory path isn't mapped to empty string.
-        name = os.path.relpath(os.path.normpath(checkpoint_path), checkpoint_dir)
-        name += os.path.sep if os.path.isdir(checkpoint_path) else ""
-        data_dict = pickle.dumps(
-            {
-                "checkpoint_name": name,
-                "data": data,
-            }
-        )
-        return data_dict
 
     @staticmethod
     def find_checkpoint_dir(checkpoint_path):
@@ -93,12 +72,21 @@ class TrainableUtil:
         `checkpoint_path`.
         For example, returns `checkpoint00000`.
         """
-        assert checkpoint_path.startswith(
-            logdir
-        ), "expecting `logdir` to be a prefix of `checkpoint_path`"
+        assert checkpoint_path.startswith(logdir), (
+            f"expecting `logdir` to be a prefix of `checkpoint_path`, got "
+            f"{checkpoint_path} (not in {logdir})"
+        )
         rel_path = os.path.relpath(checkpoint_path, logdir)
         tokens = rel_path.split(os.sep)
         return os.path.join(tokens[0])
+
+    @staticmethod
+    def _make_checkpoint_dir_name(index: Union[int, str]):
+        """Get the name of the checkpoint directory suffix."""
+        suffix = "checkpoint"
+        if index is not None:
+            suffix += f"_{index:06d}" if isinstance(index, int) else f"_{index}"
+        return suffix
 
     @staticmethod
     def make_checkpoint_dir(
@@ -113,9 +101,7 @@ class TrainableUtil:
             override: Deletes checkpoint_dir before creating
                 a new one.
         """
-        suffix = "checkpoint"
-        if index is not None:
-            suffix += f"_{index:06d}" if isinstance(index, int) else f"_{index}"
+        suffix = TrainableUtil._make_checkpoint_dir_name(index)
         checkpoint_dir = os.path.join(checkpoint_dir, suffix)
 
         if override and os.path.exists(checkpoint_dir):
@@ -147,9 +133,10 @@ class TrainableUtil:
         iter_chkpt_pairs = []
         for marker_path in marker_paths:
             chkpt_dir = os.path.dirname(marker_path)
+            basename = os.path.basename(chkpt_dir)
 
             # Skip temporary checkpoints
-            if os.path.basename(chkpt_dir).startswith("checkpoint_tmp"):
+            if basename.startswith("checkpoint_tmp"):
                 continue
 
             metadata_file = glob.glob(
@@ -161,9 +148,21 @@ class TrainableUtil:
                 os.path.join(glob.escape(chkpt_dir), _TUNE_METADATA_FILENAME)
             )
             metadata_file = list(set(metadata_file))  # avoid duplication
-            if len(metadata_file) != 1:
+            if len(metadata_file) == 0:
+                logger.warning(
+                    f"The checkpoint {basename} does not have a metadata file. "
+                    f"This usually means that the training process was interrupted "
+                    f"while the checkpoint was being written. The checkpoint will be "
+                    f"excluded from analysis. Consider deleting the directory. "
+                    f"Full path: {chkpt_dir}"
+                )
+                continue
+            elif len(metadata_file) > 1:
                 raise ValueError(
-                    "{} has zero or more than one tune_metadata.".format(chkpt_dir)
+                    f"The checkpoint {basename} contains more than one metadata file. "
+                    f"If this happened without manual intervention, please file an "
+                    f"issue at https://github.com/ray-project/ray/issues. "
+                    f"Full path: {chkpt_dir}"
                 )
 
             metadata_file = metadata_file[0]
@@ -184,55 +183,23 @@ class TrainableUtil:
         )
         return chkpt_df
 
-
-@DeveloperAPI
-class PlacementGroupUtil:
     @staticmethod
-    def get_remote_worker_options(
-        num_workers: int,
-        num_cpus_per_worker: int,
-        num_gpus_per_worker: int,
-        num_workers_per_host: Optional[int],
-        timeout_s: Optional[int],
-    ) -> (Dict[str, Any], placement_group):
-        """Returns the option for remote workers.
+    def get_remote_storage_path(
+        local_path: str, local_path_prefix: str, remote_path_prefix: str
+    ) -> str:
+        """Converts a ``local_path`` to be based off of
+        ``remote_path_prefix`` instead of ``local_path_prefix``.
 
-        Args:
-            num_workers: Number of training workers to include in
-                world.
-            num_cpus_per_worker: Number of CPU resources to reserve
-                per training worker.
-            num_gpus_per_worker: Number of GPU resources to reserve
-                per training worker.
-            num_workers_per_host: Optional[int]: Number of workers to
-                colocate per host.
-            timeout_s: Seconds before the torch process group
-                times out. Useful when machines are unreliable. Defaults
-                to 60 seconds. This value is also reused for triggering
-                placement timeouts if forcing colocation.
+        ``local_path_prefix`` is assumed to be a prefix of ``local_path``.
 
+        Example:
 
-        Returns:
-            type: option that contains CPU/GPU count of
-                the remote worker and the placement group information.
-            pg: return a reference to the placement group
+            >>> TrainableUtil.get_remote_storage_path("/a/b/c", "/a", "s3://bucket/")
+            's3://bucket/b/c'
         """
-        pg = None
-        options = dict(num_cpus=num_cpus_per_worker, num_gpus=num_gpus_per_worker)
-        if num_workers_per_host:
-            num_hosts = int(num_workers / num_workers_per_host)
-            cpus_per_node = num_cpus_per_worker * num_workers_per_host
-            gpus_per_node = num_gpus_per_worker * num_workers_per_host
-            bundle = {"CPU": cpus_per_node, "GPU": gpus_per_node}
-
-            all_bundles = [bundle] * num_hosts
-            pg = placement_group(all_bundles, strategy="STRICT_SPREAD")
-            logger.debug("Waiting for placement_group to start.")
-            ray.get(pg.ready(), timeout=timeout_s)
-            logger.debug("Placement_group started.")
-            options["placement_group"] = pg
-
-        return options, pg
+        rel_local_path = os.path.relpath(local_path, local_path_prefix)
+        uri = URI(remote_path_prefix)
+        return str(uri / rel_local_path)
 
 
 @PublicAPI(stability="beta")
@@ -305,7 +272,6 @@ def with_parameters(trainable: Union[Type["Trainable"], Callable], **kwargs):
             tune.with_parameters(MyTrainable, data=data),
             # ...
         )
-
     """
     from ray.tune.trainable import Trainable
 
@@ -327,10 +293,10 @@ def with_parameters(trainable: Union[Type["Trainable"], Callable], **kwargs):
         parameter_registry.put(prefix + k, v)
 
     trainable_name = getattr(trainable, "__name__", "tune_with_parameters")
+    keys = set(kwargs.keys())
 
     if inspect.isclass(trainable):
         # Class trainable
-        keys = list(kwargs.keys())
 
         class _Inner(trainable):
             def setup(self, config):
@@ -339,12 +305,10 @@ def with_parameters(trainable: Union[Type["Trainable"], Callable], **kwargs):
                     setup_kwargs[k] = parameter_registry.get(prefix + k)
                 super(_Inner, self).setup(config, **setup_kwargs)
 
-        _Inner.__name__ = trainable_name
-        return _Inner
+        trainable_with_params = _Inner
     else:
         # Function trainable
         use_checkpoint = _detect_checkpoint_function(trainable, partial=True)
-        keys = list(kwargs.keys())
 
         def inner(config, checkpoint_dir=None):
             fn_kwargs = {}
@@ -359,41 +323,36 @@ def with_parameters(trainable: Union[Type["Trainable"], Callable], **kwargs):
                 fn_kwargs[k] = parameter_registry.get(prefix + k)
             return trainable(config, **fn_kwargs)
 
-        inner.__name__ = trainable_name
+        trainable_with_params = inner
 
-        # If the trainable has been wrapped with `tune.with_resources`, we should
-        # keep the `_resources` attribute around
-        if hasattr(trainable, "_resources"):
-            inner._resources = trainable._resources
-
-        # Use correct function signature if no `checkpoint_dir` parameter
-        # is set
+        # Use correct function signature if no `checkpoint_dir` parameter is set
         if not use_checkpoint:
 
             def _inner(config):
                 return inner(config, checkpoint_dir=None)
 
-            _inner.__name__ = trainable_name
-
-            # Again, pass along the resource specification if it exists
-            if hasattr(inner, "_resources"):
-                _inner._resources = inner._resources
-
-            if hasattr(trainable, "__mixins__"):
-                _inner.__mixins__ = trainable.__mixins__
-            return _inner
+            trainable_with_params = _inner
 
         if hasattr(trainable, "__mixins__"):
-            inner.__mixins__ = trainable.__mixins__
+            trainable_with_params.__mixins__ = trainable.__mixins__
 
-        return inner
+        # If the trainable has been wrapped with `tune.with_resources`, we should
+        # keep the `_resources` attribute around
+        if hasattr(trainable, "_resources"):
+            trainable_with_params._resources = trainable._resources
+
+    trainable_with_params.__name__ = trainable_name
+    return trainable_with_params
 
 
 @PublicAPI(stability="beta")
 def with_resources(
     trainable: Union[Type["Trainable"], Callable],
     resources: Union[
-        Dict[str, float], PlacementGroupFactory, Callable[[dict], PlacementGroupFactory]
+        Dict[str, float],
+        PlacementGroupFactory,
+        ScalingConfig,
+        Callable[[dict], PlacementGroupFactory],
     ],
 ):
     """Wrapper for trainables to specify resource requests.
@@ -410,8 +369,9 @@ def with_resources(
 
     Args:
         trainable: Trainable to wrap.
-        resources: Resource dict, placement group factory, or callable that takes
-            in a config dict and returns a placement group factory.
+        resources: Resource dict, placement group factory, AIR ``ScalingConfig``
+            or callable that takes in a config dict and returns a placement
+            group factory.
 
     Example:
 
@@ -436,13 +396,15 @@ def with_resources(
         inspect.isclass(trainable) and not issubclass(trainable, Trainable)
     ):
         raise ValueError(
-            f"`tune.with_parameters() only works with function trainables "
+            f"`tune.with_resources() only works with function trainables "
             f"or classes that inherit from `tune.Trainable()`. Got type: "
             f"{type(trainable)}."
         )
 
     if isinstance(resources, PlacementGroupFactory):
         pgf = resources
+    elif isinstance(resources, ScalingConfig):
+        pgf = resources.as_placement_group_factory()
     elif isinstance(resources, dict):
         pgf = resource_dict_to_pg_factory(resources)
     elif callable(resources):
@@ -484,7 +446,7 @@ def with_resources(
             @classmethod
             def default_resource_request(
                 cls, config: Dict[str, Any]
-            ) -> Optional[Union[Resources, PlacementGroupFactory]]:
+            ) -> Optional[PlacementGroupFactory]:
                 if not isinstance(pgf, PlacementGroupFactory) and callable(pgf):
                     return pgf(config)
                 return pgf

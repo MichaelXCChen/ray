@@ -4,7 +4,7 @@
 
 In this section we cover how to execute your distributed Ray programs on a Kubernetes cluster.
 
-Using the [KubeRay Operator](https://ray-project.github.io/kuberay/components/operator/) is the
+Using the [KubeRay Operator](https://ray-project.github.io/kuberay/) is the
 recommended way to do so. The operator provides a Kubernetes-native way to manage Ray clusters.
 Each Ray cluster consists of a head node pod and a collection of worker node pods. Optional
 autoscaling support allows the KubeRay Operator to size your Ray clusters according to the
@@ -31,54 +31,69 @@ Concretely, you will learn how to:
 The Ray docs present all the information you need to start running Ray workloads on Kubernetes.
 
 ```{eval-rst}
-.. panels::
-    :container: text-center
-    :column: col-lg-6 px-2 py-2
-    :card:
+.. grid:: 1 2 2 2
+    :gutter: 1
+    :class-container: container pb-3
+    
+    .. grid-item-card::
 
-    **Getting Started**
-    ^^^
+        **Getting Started**
+        ^^^
+    
+        Learn how to start a Ray cluster and deploy Ray applications on Kubernetes.
+    
+        +++
+        .. button-ref:: kuberay-quickstart
+            :color: primary
+            :outline:
+            :expand:
 
-    Learn how to start a Ray cluster and deploy Ray applications on Kubernetes.
+            Get Started with Ray on Kubernetes
 
-    +++
-    .. link-button:: kuberay-quickstart
-        :type: ref
-        :text: Get Started with Ray on Kubernetes
-        :classes: btn-outline-info btn-block
-    ---
-    **Examples**
-    ^^^
+    .. grid-item-card::
 
-    Try example Ray workloads on Kubernetes.
+        **Examples**
+        ^^^
+    
+        Try example Ray workloads on Kubernetes.
+    
+        +++
+        .. button-ref:: kuberay-examples
+            :color: primary
+            :outline:
+            :expand:
 
-    +++
-    .. link-button:: kuberay-examples
-        :type: ref
-        :text: Try example workloads
-        :classes: btn-outline-info btn-block
-    ---
-    **User Guides**
-    ^^^
+            Try example workloads
+        
+    .. grid-item-card::
 
-    Learn best practices for configuring Ray clusters on Kubernetes.
+        **User Guides**
+        ^^^
+    
+        Learn best practices for configuring Ray clusters on Kubernetes.
+    
+        +++
+        .. button-ref:: kuberay-guides
+            :color: primary
+            :outline:
+            :expand:
 
-    +++
-    .. link-button:: kuberay-guides
-        :type: ref
-        :text: Read the User Guides
-        :classes: btn-outline-info btn-block
-    ---
-    **API Reference**
-    ^^^
+            Read the User Guides
+    
+    .. grid-item-card::
 
-    Find API references on RayCluster configuration.
+        **API Reference**
+        ^^^
+    
+        Find API references on RayCluster configuration.
+    
+        +++
+        .. button-ref:: kuberay-api-reference
+            :color: primary
+            :outline:
+            :expand:
 
-    +++
-    .. link-button:: kuberay-api-reference
-        :type: ref
-        :text: Check API references
-        :classes: btn-outline-info btn-block
+            Check API references
 ```
 ## About KubeRay
 
@@ -90,9 +105,9 @@ the project.
 and discussion of new and upcoming features.
 
 ```{note}
-The KubeRay operator replaces the older Ray operator hosted in the [Ray repository](https://github.com/ray-project/ray/tree/master/python/ray/ray_operator).
-The legacy Ray operator will be compatible with Ray versions up to Ray 2.1.0.
-However, **the legacy Ray operator will be removed in Ray 2.2.0.**
+The KubeRay operator replaces the older Ray operator previously hosted in the [Ray repository](https://github.com/ray-project/ray/tree/releases/2.1.0/python/ray/ray_operator).
+The legacy Ray operator is compatible with Ray versions up to Ray 2.1.0.
+However, **the legacy Ray operator cannot be used with Ray 2.2.0 or newer.**
 Check the linked README for migration notes.
 
 If you have used the legacy Ray operator in the past,

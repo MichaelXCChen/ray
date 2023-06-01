@@ -1,10 +1,15 @@
-import { TableCell, TableRow, Tooltip } from "@material-ui/core";
+import { Link, TableCell, TableRow, Tooltip } from "@material-ui/core";
 import { makeStyles } from "@material-ui/core/styles";
-import dayjs from "dayjs";
-import React, { useContext } from "react";
-import { Link } from "react-router-dom";
-import { GlobalContext } from "../../App";
+import React from "react";
+import { Link as RouterLink } from "react-router-dom";
+import { CodeDialogButtonWithPreview } from "../../common/CodeDialogButton";
 import { DurationText } from "../../common/DurationText";
+import { formatDateFromTimeMs } from "../../common/formatUtils";
+import { JobStatusWithIcon } from "../../common/JobStatus";
+import {
+  CpuProfilingLink,
+  CpuStackTraceLink,
+} from "../../common/ProfilingLink";
 import { UnifiedJob } from "../../type/job";
 import { useJobProgress } from "./hook/useJobProgress";
 import { MiniTaskProgressBar } from "./TaskProgressBar";
@@ -12,10 +17,15 @@ import { MiniTaskProgressBar } from "./TaskProgressBar";
 const useStyles = makeStyles((theme) => ({
   overflowCell: {
     display: "block",
-    width: "150px",
+    margin: "auto",
+    maxWidth: 360,
     textOverflow: "ellipsis",
     overflow: "hidden",
     whiteSpace: "nowrap",
+  },
+  statusMessage: {
+    maxWidth: 250,
+    display: "inline-flex",
   },
 }));
 
@@ -23,30 +33,26 @@ type JobRowProps = {
   job: UnifiedJob;
 };
 
-export const JobRow = ({
-  job: {
+export const JobRow = ({ job }: JobRowProps) => {
+  const {
     job_id,
     submission_id,
     driver_info,
-    type,
     status,
+    message,
     start_time,
     end_time,
     entrypoint,
-  },
-}: JobRowProps) => {
-  const { ipLogMap } = useContext(GlobalContext);
-  const { progress, error } = useJobProgress(job_id ?? undefined);
+  } = job;
+  const { progress, error, driverExists } = useJobProgress(job_id ?? undefined);
   const classes = useStyles();
 
   const progressBar = (() => {
+    if (!driverExists) {
+      return <MiniTaskProgressBar />;
+    }
     if (!progress || error) {
-      if (status === "SUCCEEDED" || status === "FAILED") {
-        // Show a fake all-green progress bar.
-        return <MiniTaskProgressBar numFinished={1} showTooltip={false} />;
-      } else {
-        return "unavailable";
-      }
+      return "unavailable";
     }
     if (status === "SUCCEEDED" || status === "FAILED") {
       // TODO(aguo): Show failed tasks in progress bar once supported.
@@ -56,10 +62,22 @@ export const JobRow = ({
     }
   })();
 
+  const jobId = job_id ? job_id : submission_id;
+
   return (
     <TableRow>
       <TableCell align="center">
-        {job_id ? <Link to={`/job/${job_id}`}>{job_id}</Link> : "-"}
+        {job_id ? (
+          <Link component={RouterLink} to={job_id}>
+            {job_id}
+          </Link>
+        ) : submission_id ? (
+          <Link component={RouterLink} to={submission_id}>
+            (no ray driver)
+          </Link>
+        ) : (
+          "(no ray driver)"
+        )}
       </TableCell>
       <TableCell align="center">{submission_id ?? "-"}</TableCell>
       <TableCell align="center">
@@ -72,7 +90,20 @@ export const JobRow = ({
           <div>{entrypoint}</div>
         </Tooltip>
       </TableCell>
-      <TableCell align="center">{status}</TableCell>
+      <TableCell align="center">
+        <JobStatusWithIcon job={job} />
+      </TableCell>
+      <TableCell align="center">
+        {message ? (
+          <CodeDialogButtonWithPreview
+            className={classes.statusMessage}
+            title="Status message"
+            code={message}
+          />
+        ) : (
+          "-"
+        )}
+      </TableCell>
       <TableCell align="center">
         {start_time && start_time > 0 ? (
           <DurationText startTime={start_time} endTime={end_time} />
@@ -82,30 +113,31 @@ export const JobRow = ({
       </TableCell>
       <TableCell align="center">{progressBar}</TableCell>
       <TableCell align="center">
-        {/* TODO(aguo): Also show logs for the job id instead
-      of just the submission's logs */}
-        {driver_info && ipLogMap[driver_info.node_ip_address] ? (
-          <Link
-            to={`/log/${encodeURIComponent(
-              ipLogMap[driver_info.node_ip_address],
-            )}?fileName=${
-              type === "DRIVER" ? job_id : `driver-${submission_id}`
-            }`}
-            target="_blank"
-          >
-            Log
-          </Link>
-        ) : (
-          "-"
+        {jobId && (
+          <React.Fragment>
+            <Link component={RouterLink} to={jobId}>
+              Log
+            </Link>
+            <br />
+          </React.Fragment>
         )}
+        <CpuProfilingLink
+          pid={job.driver_info?.pid}
+          ip={job.driver_info?.node_ip_address}
+          type="Driver"
+        />
+        <br />
+        <CpuStackTraceLink
+          pid={job.driver_info?.pid}
+          ip={job.driver_info?.node_ip_address}
+          type="Driver"
+        />
       </TableCell>
       <TableCell align="center">
-        {dayjs(Number(start_time)).format("YYYY/MM/DD HH:mm:ss")}
+        {start_time ? formatDateFromTimeMs(start_time) : "-"}
       </TableCell>
       <TableCell align="center">
-        {end_time && end_time > 0
-          ? dayjs(Number(end_time)).format("YYYY/MM/DD HH:mm:ss")
-          : "-"}
+        {end_time && end_time > 0 ? formatDateFromTimeMs(end_time) : "-"}
       </TableCell>
       <TableCell align="center">{driver_info?.pid ?? "-"}</TableCell>
     </TableRow>

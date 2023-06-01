@@ -6,7 +6,6 @@ from ray.rllib.algorithms.simple_q.simple_q import SimpleQ, SimpleQConfig
 from ray.rllib.policy.policy import Policy
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.deprecation import DEPRECATED_VALUE
-from ray.rllib.utils.deprecation import Deprecated
 
 logger = logging.getLogger(__name__)
 
@@ -270,12 +269,6 @@ class DDPGConfig(SimpleQConfig):
                 f"Try setting config.rollouts(rollout_fragment_length={self.n_step})."
             )
 
-        if self.model["custom_model"]:
-            raise ValueError(
-                "Try setting config.training(use_state_preprocessor=True) "
-                "since a custom model was specified."
-            )
-
         if self.grad_clip is not None and self.grad_clip <= 0.0:
             raise ValueError("`grad_clip` value must be > 0.0!")
 
@@ -318,20 +311,3 @@ class DDPG(SimpleQ):
             from ray.rllib.algorithms.ddpg.ddpg_tf_policy import DDPGTF2Policy
 
             return DDPGTF2Policy
-
-
-# Deprecated: Use ray.rllib.algorithms.ddpg.DDPGConfig instead!
-class _deprecated_default_config(dict):
-    def __init__(self):
-        super().__init__(DDPGConfig().to_dict())
-
-    @Deprecated(
-        old="ray.rllib.algorithms.ddpg.ddpg::DEFAULT_CONFIG",
-        new="ray.rllib.algorithms.ddpg.ddpg.DDPGConfig(...)",
-        error=True,
-    )
-    def __getitem__(self, item):
-        return super().__getitem__(item)
-
-
-DEFAULT_CONFIG = _deprecated_default_config()

@@ -6,7 +6,7 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig, NotProvided
 from ray.rllib.evaluation.rollout_worker import RolloutWorker
 from ray.rllib.policy.policy import Policy
 from ray.rllib.utils.annotations import override
-from ray.rllib.utils.deprecation import Deprecated
+from ray.rllib.utils.deprecation import deprecation_warning
 from ray.rllib.utils.metrics import (
     APPLY_GRADS_TIMER,
     GRAD_WAIT_TIMER,
@@ -59,6 +59,17 @@ class A3CConfig(AlgorithmConfig):
 
     def __init__(self, algo_class=None):
         """Initializes a A3CConfig instance."""
+        deprecation_warning(
+            old="rllib/algorithms/a3c/a3c.py",
+            new="rllib_contrib/a3c/",
+            help=(
+                "This algorithm will be "
+                "deprecated from RLlib in future releases. It is being moved to the "
+                "ray/rllib_contrib directory. See "
+                "https://github.com/ray-project/enhancements/blob/main/reps/2023-04-28-remove-algorithms-from-rllib.md"  # noqa: E501
+                "for more details."
+            ),
+        )
         super().__init__(algo_class=algo_class or A3C)
 
         # fmt: off
@@ -68,7 +79,13 @@ class A3CConfig(AlgorithmConfig):
         self.use_critic = True
         self.use_gae = True
         self.lambda_ = 1.0
+
         self.grad_clip = 40.0
+        # Note: Only when using _enable_learner_api=True can the clipping mode be
+        # configured by the user. On the old API stack, RLlib will always clip by
+        # global_norm, no matter the value of `grad_clip_by`.
+        self.grad_clip_by = "global_norm"
+
         self.lr_schedule = None
         self.vf_loss_coeff = 0.5
         self.entropy_coeff = 0.01
@@ -84,6 +101,15 @@ class A3CConfig(AlgorithmConfig):
         # but to wait until n seconds have passed and then to summarize the
         # thus far collected results.
         self.min_time_s_per_iteration = 5
+        self.exploration_config = {
+            # The Exploration class to use. In the simplest case, this is the name
+            # (str) of any class present in the `rllib.utils.exploration` package.
+            # You can also provide the python class directly or the full location
+            # of your class (e.g. "ray.rllib.utils.exploration.epsilon_greedy.
+            # EpsilonGreedy").
+            "type": "StochasticSampling",
+            # Add constructor kwargs here (if any).
+        }
         # __sphinx_doc_end__
         # fmt: on
 
@@ -218,6 +244,7 @@ class A3C(Algorithm):
         # update that particular worker's weights.
         global_vars = None
         learner_info_builder = LearnerInfoBuilder(num_devices=1)
+        to_sync_workers = set()
         for worker_id, result in async_results:
             # Apply gradients to local worker.
             with self._timers[APPLY_GRADS_TIMER]:
@@ -237,34 +264,16 @@ class A3C(Algorithm):
                 "timestep": self._counters[NUM_AGENT_STEPS_SAMPLED],
             }
 
-            # Synch updated weights back to the particular worker
-            # (only those policies that are trainable).
-            with self._timers[SYNCH_WORKER_WEIGHTS_TIMER]:
-                self.workers.sync_weights(
-                    policies=local_worker.get_policies_to_train(),
-                    to_worker_indices=[worker_id],
-                    global_vars=global_vars,
-                )
+            # Add this worker to be synced.
+            to_sync_workers.add(worker_id)
 
-        # Update global vars of the local worker.
-        if global_vars:
-            local_worker.set_global_vars(global_vars)
+        # Synch updated weights back to the particular worker
+        # (only those policies that are trainable).
+        with self._timers[SYNCH_WORKER_WEIGHTS_TIMER]:
+            self.workers.sync_weights(
+                policies=local_worker.get_policies_to_train(),
+                to_worker_indices=list(to_sync_workers),
+                global_vars=global_vars,
+            )
 
         return learner_info_builder.finalize()
-
-
-# Deprecated: Use ray.rllib.algorithms.a3c.A3CConfig instead!
-class _deprecated_default_config(dict):
-    def __init__(self):
-        super().__init__(A3CConfig().to_dict())
-
-    @Deprecated(
-        old="ray.rllib.agents.a3c.a3c.DEFAULT_CONFIG",
-        new="ray.rllib.algorithms.a3c.a3c.A3CConfig(...)",
-        error=True,
-    )
-    def __getitem__(self, item):
-        return super().__getitem__(item)
-
-
-DEFAULT_CONFIG = _deprecated_default_config()

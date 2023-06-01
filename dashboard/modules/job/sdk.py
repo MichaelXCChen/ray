@@ -60,6 +60,8 @@ class JobSubmissionClient(SubmissionClient):
             via a simple dict update.
         headers: Headers to use when sending requests to the HTTP job server, used
             for cases like authentication to a remote cluster.
+        verify: Boolean indication to verify the server's TLS certificate or a path to
+            a file or directory of trusted certificates. Default: True.
     """
 
     def __init__(
@@ -69,15 +71,15 @@ class JobSubmissionClient(SubmissionClient):
         cookies: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, Any]] = None,
+        verify: Optional[Union[str, bool]] = True,
     ):
         self._client_ray_version = ray.__version__
         """Initialize a JobSubmissionClient and check the connection to the cluster."""
         if requests is None:
             raise RuntimeError(
                 "The Ray jobs CLI & SDK require the ray[default] "
-                "installation: `pip install 'ray[default']``"
+                "installation: `pip install 'ray[default]'`"
             )
-
         # Check types of arguments
         if address is not None and not isinstance(address, str):
             raise TypeError(f"address must be a string, got {type(address)}")
@@ -92,6 +94,8 @@ class JobSubmissionClient(SubmissionClient):
             raise TypeError(f"metadata must be a dict, got {type(metadata)}")
         if headers is not None and not isinstance(headers, dict):
             raise TypeError(f"headers must be a dict, got {type(headers)}")
+        if not (isinstance(verify, str) or isinstance(verify, bool)):
+            raise TypeError(f"verify must be a str or bool, got {type(verify)}")
 
         api_server_url = get_address_for_submission_client(address)
 
@@ -101,6 +105,7 @@ class JobSubmissionClient(SubmissionClient):
             cookies=cookies,
             metadata=metadata,
             headers=headers,
+            verify=verify,
         )
         self._check_connection_and_version(
             min_version="1.9",
@@ -121,7 +126,7 @@ class JobSubmissionClient(SubmissionClient):
                 "running Ray 2.0 or higher or downgrade the client Ray version.",
             )
 
-    @PublicAPI(stability="beta")
+    @PublicAPI(stability="stable")
     def submit_job(
         self,
         *,
@@ -175,7 +180,7 @@ class JobSubmissionClient(SubmissionClient):
 
         Raises:
             RuntimeError: If the request to the job server fails, or if the specified
-            submission_id has already been used by a job on this cluster.
+                submission_id has already been used by a job on this cluster.
         """
         if job_id:
             logger.warning(
@@ -225,12 +230,14 @@ class JobSubmissionClient(SubmissionClient):
         else:
             self._raise_error(r)
 
-    @PublicAPI(stability="beta")
+    @PublicAPI(stability="stable")
     def stop_job(
         self,
         job_id: str,
     ) -> bool:
         """Request a job to exit asynchronously.
+
+        Attempts to terminate process first, then kills process after timeout.
 
         Example:
             >>> from ray.job_submission import JobSubmissionClient
@@ -247,7 +254,7 @@ class JobSubmissionClient(SubmissionClient):
 
         Raises:
             RuntimeError: If the job does not exist or if the request to the
-            job server fails.
+                job server fails.
         """
         logger.debug(f"Stopping job with job_id={job_id}.")
         r = self._do_request("POST", f"/api/jobs/{job_id}/stop")
@@ -294,7 +301,7 @@ class JobSubmissionClient(SubmissionClient):
         else:
             self._raise_error(r)
 
-    @PublicAPI(stability="beta")
+    @PublicAPI(stability="stable")
     def get_job_info(
         self,
         job_id: str,
@@ -312,14 +319,14 @@ class JobSubmissionClient(SubmissionClient):
 
         Args:
             job_id: The job ID or submission ID of the job whose information
-            is being requested.
+                is being requested.
 
         Returns:
             The JobInfo for the job.
 
         Raises:
             RuntimeError: If the job does not exist or if the request to the
-            job server fails.
+                job server fails.
         """
         r = self._do_request("GET", f"/api/jobs/{job_id}")
 
@@ -328,7 +335,7 @@ class JobSubmissionClient(SubmissionClient):
         else:
             self._raise_error(r)
 
-    @PublicAPI(stability="beta")
+    @PublicAPI(stability="stable")
     def list_jobs(self) -> List[JobDetails]:
         """List all jobs along with their status and other information.
 
@@ -369,7 +376,7 @@ class JobSubmissionClient(SubmissionClient):
         else:
             self._raise_error(r)
 
-    @PublicAPI(stability="beta")
+    @PublicAPI(stability="stable")
     def get_job_status(self, job_id: str) -> JobStatus:
         """Get the most recent status of a job.
 
@@ -382,18 +389,18 @@ class JobSubmissionClient(SubmissionClient):
 
         Args:
             job_id: The job ID or submission ID of the job whose status is being
-            requested.
+                requested.
 
         Returns:
             The JobStatus of the job.
 
         Raises:
             RuntimeError: If the job does not exist or if the request to the
-            job server fails.
+                job server fails.
         """
         return self.get_job_info(job_id).status
 
-    @PublicAPI(stability="beta")
+    @PublicAPI(stability="stable")
     def get_job_logs(self, job_id: str) -> str:
         """Get all logs produced by a job.
 
@@ -406,14 +413,14 @@ class JobSubmissionClient(SubmissionClient):
 
         Args:
             job_id: The job ID or submission ID of the job whose logs are being
-            requested.
+                requested.
 
         Returns:
             A string containing the full logs of the job.
 
         Raises:
             RuntimeError: If the job does not exist or if the request to the
-            job server fails.
+                job server fails.
         """
         r = self._do_request("GET", f"/api/jobs/{job_id}/logs")
 
@@ -422,7 +429,7 @@ class JobSubmissionClient(SubmissionClient):
         else:
             self._raise_error(r)
 
-    @PublicAPI(stability="beta")
+    @PublicAPI(stability="stable")
     async def tail_job_logs(self, job_id: str) -> Iterator[str]:
         """Get an iterator that follows the logs of a job.
 
@@ -439,20 +446,20 @@ class JobSubmissionClient(SubmissionClient):
 
         Args:
             job_id: The job ID or submission ID of the job whose logs are being
-            requested.
+                requested.
 
         Returns:
             The iterator.
 
         Raises:
             RuntimeError: If the job does not exist or if the request to the
-            job server fails.
+                job server fails.
         """
         async with aiohttp.ClientSession(
             cookies=self._cookies, headers=self._headers
         ) as session:
             ws = await session.ws_connect(
-                f"{self._address}/api/jobs/{job_id}/logs/tail"
+                f"{self._address}/api/jobs/{job_id}/logs/tail", ssl=self._ssl_context
             )
 
             while True:

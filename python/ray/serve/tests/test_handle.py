@@ -1,11 +1,17 @@
 import concurrent.futures
 import asyncio
 import pytest
+from ray._private.utils import get_or_create_event_loop
 import requests
 
 import ray
 from ray import serve
 from ray.serve.exceptions import RayServeException
+from ray.serve._private.constants import (
+    SERVE_DEFAULT_APP_NAME,
+    DEPLOYMENT_NAME_PREFIX_SEPARATOR,
+)
+from ray.serve.context import get_global_client
 
 
 @pytest.mark.asyncio
@@ -79,7 +85,10 @@ def test_sync_handle_in_thread(serve_instance):
     handle = serve.run(f.bind())
 
     def thread_get_handle(deploy):
-        handle = deploy.get_handle(sync=True)
+        deployment_name = (
+            f"{SERVE_DEFAULT_APP_NAME}{DEPLOYMENT_NAME_PREFIX_SEPARATOR}{deploy._name}"
+        )
+        handle = get_global_client().get_handle(deployment_name, sync=True)
         return handle
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -230,7 +239,7 @@ def test_handle_across_loops(serve_instance):
 
     for _ in range(10):
         asyncio.set_event_loop(asyncio.new_event_loop())
-        asyncio.get_event_loop().run_until_complete(refresh_get())
+        get_or_create_event_loop().run_until_complete(refresh_get())
 
     handle = A.get_handle(sync=False)
 
@@ -239,7 +248,7 @@ def test_handle_across_loops(serve_instance):
 
     for _ in range(10):
         asyncio.set_event_loop(asyncio.new_event_loop())
-        asyncio.get_event_loop().run_until_complete(cache_get())
+        get_or_create_event_loop().run_until_complete(cache_get())
 
 
 if __name__ == "__main__":

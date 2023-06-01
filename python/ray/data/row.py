@@ -1,10 +1,10 @@
 from collections.abc import Mapping
 from typing import Any
 
-from ray.util.annotations import PublicAPI
+from ray.util.annotations import Deprecated
 
 
-@PublicAPI
+@Deprecated("TableRow is no longer part of the public Ray Data API.")
 class TableRow(Mapping):
     """
     A dict-like row of a tabular ``Dataset``.
@@ -41,5 +41,5 @@ class TableRow(Mapping):
     def _repr_pretty_(self, p, cycle):
         from IPython.lib.pretty import _dict_pprinter_factory
 
-        pprinter = _dict_pprinter_factory(f"{type(self).__name__}({{", "})")
+        pprinter = _dict_pprinter_factory("{", "}")
         return pprinter(self, p, cycle)

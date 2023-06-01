@@ -1,18 +1,12 @@
 .. _observability:
 
-Observability
-=============
+Monitoring and Debugging
+========================
 
-.. toctree::
-    :maxdepth: 2
-    :caption: Observability, Debugging, and Profiling
+The Ray Dashboard, State API, State CLI, and SDK help you monitor the health of your applications and Clusters or debug them when they behave unexpectedly.
 
-    overview
-    ../ray-core/ray-dashboard.rst
-    state/state-api.rst
-    ray-debugging.rst
-    ray-logging.rst
-    ray-metrics.rst
-    ray-tracing.rst
-    ../ray-contribute/debugging.rst
-    ../ray-contribute/profiling.rst
+.. raw:: html
+
+    <div style="position: relative; height: 0; overflow: hidden; max-width: 100%; height: auto;">
+        <iframe width="560" height="315" src="https://www.youtube.com/embed/i33b1DYjYRQ" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+    </div>

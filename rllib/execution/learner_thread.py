@@ -1,5 +1,5 @@
 import copy
-from six.moves import queue
+import queue
 import threading
 from typing import Dict, Optional
 
@@ -68,7 +68,7 @@ class LearnerThread(threading.Thread):
 
     def run(self) -> None:
         # Switch on eager mode if configured.
-        if self.local_worker.policy_config.get("framework") == "tf2":
+        if self.local_worker.config.framework_str == "tf2":
             tf1.enable_eager_execution()
         while not self.stopped:
             self.step()
@@ -86,7 +86,11 @@ class LearnerThread(threading.Thread):
             # no matter the setup (multi-GPU, multi-agent, minibatch SGD,
             # tf vs torch).
             learner_info_builder = LearnerInfoBuilder(num_devices=1)
+            if self.local_worker.config.policy_states_are_swappable:
+                self.local_worker.lock()
             multi_agent_results = self.local_worker.learn_on_batch(batch)
+            if self.local_worker.config.policy_states_are_swappable:
+                self.local_worker.unlock()
             self.policy_ids_updated.extend(list(multi_agent_results.keys()))
             for pid, results in multi_agent_results.items():
                 learner_info_builder.add_learn_on_batch_results(results, pid)

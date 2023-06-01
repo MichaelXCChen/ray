@@ -6,6 +6,7 @@ import logging
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -14,21 +15,32 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 import zipfile
 from enum import Enum
 from itertools import chain
 
+# Workaround for setuptools_scm (used on macos) adding junk files
+# https://stackoverflow.com/a/61274968/8162137
+try:
+    import setuptools_scm.integration
+
+    setuptools_scm.integration.find_files = lambda _: []
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PYTHONS = [(3, 6), (3, 7), (3, 8), (3, 9), (3, 10)]
+SUPPORTED_PYTHONS = [(3, 7), (3, 8), (3, 9), (3, 10), (3, 11)]
 # When the bazel version is updated, make sure to update it
 # in WORKSPACE file as well.
 
-SUPPORTED_BAZEL = (4, 2, 2)
+SUPPORTED_BAZEL = (5, 4, 0)
 
 ROOT_DIR = os.path.dirname(__file__)
 BUILD_JAVA = os.getenv("RAY_INSTALL_JAVA") == "1"
 SKIP_BAZEL_BUILD = os.getenv("SKIP_BAZEL_BUILD") == "1"
+BAZEL_ARGS = os.getenv("BAZEL_ARGS")
 BAZEL_LIMIT_CPUS = os.getenv("BAZEL_LIMIT_CPUS")
 
 PICKLE5_SUBDIR = os.path.join("ray", "pickle5_files")
@@ -101,7 +113,7 @@ class SetupSpec:
 
     def get_packages(self):
         if self.type == SetupType.RAY:
-            return setuptools.find_packages(exclude=["tests"])
+            return setuptools.find_packages(exclude=("tests", "*.tests", "*.tests.*"))
         else:
             return []
 
@@ -182,8 +194,6 @@ ray_files += [
     "ray/autoscaler/_private/_azure/azure-config-template.json",
     "ray/autoscaler/gcp/defaults.yaml",
     "ray/autoscaler/local/defaults.yaml",
-    "ray/autoscaler/kubernetes/defaults.yaml",
-    "ray/autoscaler/_private/_kubernetes/kubectl-rsync.sh",
     "ray/autoscaler/ray-schema.json",
 ]
 
@@ -200,7 +210,14 @@ ray_files += [
     for dirpath, dirnames, filenames in os.walk("ray/dashboard/modules/metrics/export")
     for filename in filenames
 ]
-ray_files += ["ray/dashboard/modules/metrics/grafana_dashboard_base.json"]
+ray_files += [
+    os.path.join(dirpath, filename)
+    for dirpath, dirnames, filenames in os.walk(
+        "ray/dashboard/modules/metrics/dashboards"
+    )
+    for filename in filenames
+    if filename.endswith(".json")
+]
 
 # html templates for notebook integration
 ray_files += [
@@ -211,18 +228,11 @@ ray_files += [
 # also update the matching section of requirements/requirements.txt
 # in this directory
 if setup_spec.type == SetupType.RAY:
-    if sys.version_info >= (3, 7):
-        pandas_dep = "pandas >= 1.3"
-        numpy_dep = "numpy >= 1.20"
+    pandas_dep = "pandas >= 1.3"
+    numpy_dep = "numpy >= 1.20"
+    if sys.platform != "win32":
+        pyarrow_dep = "pyarrow >= 6.0.1"
     else:
-        # Pandas dropped python 3.6 support in 1.2.
-        pandas_dep = "pandas >= 1.0.5"
-        # NumPy dropped python 3.6 support in 1.20.
-        numpy_dep = "numpy >= 1.19"
-    if sys.version_info >= (3, 7) and sys.platform != "win32":
-        pyarrow_dep = "pyarrow >= 6.0.1, < 8.0.0"
-    else:
-        # pyarrow dropped python 3.6 support in 7.0.0.
         # Serialization workaround for pyarrow 7.0.0+ doesn't work for Windows.
         pyarrow_dep = "pyarrow >= 6.0.1, < 7.0.0"
     setup_spec.extras = {
@@ -243,16 +253,17 @@ if setup_spec.type == SetupType.RAY:
             "gpustat >= 1.0.0",  # for windows
             "opencensus",
             "pydantic",
-            "prometheus_client >= 0.7.1, < 0.14.0",
+            "prometheus_client >= 0.7.1",
             "smart_open",
+            "virtualenv >=20.0.24, < 20.21.1",  # For pip runtime env.
         ],
         "serve": ["uvicorn", "requests", "starlette", "fastapi", "aiorwlock"],
-        "tune": ["pandas", "tabulate", "tensorboardX>=1.9", "requests"],
+        "tune": ["pandas", "tensorboardX>=1.9", "requests", pyarrow_dep],
         "k8s": ["kubernetes", "urllib3"],
         "observability": [
-            "opentelemetry-api==1.1.0",
-            "opentelemetry-sdk==1.1.0",
-            "opentelemetry-exporter-otlp==1.1.0",
+            "opentelemetry-api",
+            "opentelemetry-sdk",
+            "opentelemetry-exporter-otlp",
         ],
     }
 
@@ -264,16 +275,10 @@ if setup_spec.type == SetupType.RAY:
     if RAY_EXTRA_CPP:
         setup_spec.extras["cpp"] = ["ray-cpp==" + setup_spec.version]
 
-    if sys.version_info >= (3, 7, 0):
-        setup_spec.extras["k8s"].append("kopf")
-
     setup_spec.extras["rllib"] = setup_spec.extras["tune"] + [
         "dm_tree",
-        "gym>=0.21.0,<0.24.0",
+        "gymnasium==0.26.3",
         "lz4",
-        # matplotlib (dependency of scikit-image) 3.4.3 breaks docker build
-        # Todo: Remove this when safe?
-        "matplotlib!=3.4.3",
         "scikit-image",
         "pyyaml",
         "scipy",
@@ -310,13 +315,17 @@ if setup_spec.type == SetupType.RAY:
         "click >= 7.0",
         "dataclasses; python_version < '3.7'",
         "filelock",
-        "grpcio >= 1.32.0; python_version < '3.10'",
-        "grpcio >= 1.42.0; python_version >= '3.10'",
+        # Tracking issue: https://github.com/ray-project/ray/issues/30984
+        "grpcio >= 1.32.0, <= 1.49.1; python_version < '3.10' and sys_platform == 'darwin'",  # noqa:E501
+        "grpcio >= 1.42.0, <= 1.49.1; python_version >= '3.10' and sys_platform == 'darwin'",  # noqa:E501
+        # Original issue: https://github.com/ray-project/ray/issues/33833
+        "grpcio >= 1.32.0, <= 1.51.3; python_version < '3.10' and sys_platform != 'darwin'",  # noqa:E501
+        "grpcio >= 1.42.0, <= 1.51.3; python_version >= '3.10' and sys_platform != 'darwin'",  # noqa:E501
         "jsonschema",
         "msgpack >= 1.0.0, < 2.0.0",
         "numpy >= 1.16; python_version < '3.9'",
         "numpy >= 1.19.3; python_version >= '3.9'",
-        "packaging; python_version >= '3.10'",
+        "packaging",
         "protobuf >= 3.15.3, != 3.19.5",
         "pyyaml",
         "aiosignal",
@@ -325,7 +334,6 @@ if setup_spec.type == SetupType.RAY:
         # Light weight requirement, can be replaced with "typing" once
         # we deprecate Python 3.7 (this will take a while).
         "typing_extensions; python_version < '3.8'",
-        "virtualenv>=20.0.24",  # For pip runtime env.
     ]
 
 
@@ -343,8 +351,8 @@ def is_invalid_windows_platform():
     return platform == "msys" or (platform == "win32" and ver and "GCC" in ver)
 
 
-# Calls Bazel in PATH, falling back to the standard user installatation path
-# (~/.bazel/bin/bazel) if it isn't found.
+# Calls Bazel in PATH, falling back to the standard user installation path
+# (~/bin/bazel) if it isn't found.
 def bazel_invoke(invoker, cmdline, *args, **kwargs):
     home = os.path.expanduser("~")
     first_candidate = os.getenv("BAZEL_PATH", "bazel")
@@ -354,7 +362,7 @@ def bazel_invoke(invoker, cmdline, *args, **kwargs):
         if mingw_dir:
             candidates.append(mingw_dir + "/bin/bazel.exe")
     else:
-        candidates.append(os.path.join(home, ".bazel", "bin", "bazel"))
+        candidates.append(os.path.join(home, "bin", "bazel"))
     result = None
     for i, cmd in enumerate(candidates):
         try:
@@ -555,9 +563,17 @@ def build(build_python, build_java, build_cpp):
         )
 
     bazel_flags = ["--verbose_failures"]
+    if BAZEL_ARGS:
+        bazel_flags.extend(shlex.split(BAZEL_ARGS))
+
     if BAZEL_LIMIT_CPUS:
         n = int(BAZEL_LIMIT_CPUS)  # the value must be an int
         bazel_flags.append(f"--local_cpu_resources={n}")
+        warnings.warn(
+            "Setting BAZEL_LIMIT_CPUS is deprecated and will be removed in a future"
+            " version. Please use BAZEL_ARGS instead.",
+            FutureWarning,
+        )
 
     if not is_automated_build:
         bazel_precmd_flags = []
@@ -769,7 +785,6 @@ setuptools.setup(
         "reinforcement-learning deep-learning serving python"
     ),
     classifiers=[
-        "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
@@ -780,14 +795,13 @@ setuptools.setup(
     # The BinaryDistribution argument triggers build_ext.
     distclass=BinaryDistribution,
     install_requires=setup_spec.install_requires,
-    setup_requires=["cython >= 0.29.26", "wheel"],
+    setup_requires=["cython >= 0.29.32", "wheel"],
     extras_require=setup_spec.extras,
     entry_points={
         "console_scripts": [
             "ray=ray.scripts.scripts:main",
             "rllib=ray.rllib.scripts:cli [rllib]",
             "tune=ray.tune.cli.scripts:cli",
-            "ray-operator=ray.ray_operator.operator:main",
             "serve=ray.serve.scripts:cli",
         ]
     },
@@ -795,6 +809,11 @@ setuptools.setup(
         "ray": ["includes/*.pxd", "*.pxd"],
     },
     include_package_data=True,
+    exclude_package_data={
+        # Empty string means "any package".
+        # Therefore, exclude BUILD from every package:
+        "": ["BUILD"],
+    },
     zip_safe=False,
     license="Apache 2.0",
 ) if __name__ == "__main__" else None

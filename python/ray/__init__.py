@@ -1,7 +1,10 @@
 # isort: skip_file
+from ray._private import log  # isort: skip # noqa: F401
 import logging
 import os
+import sys
 
+log.generate_logging_config()
 logger = logging.getLogger(__name__)
 
 
@@ -69,14 +72,6 @@ def _configure_system():
                 "#m1-mac-apple-silicon-support for more details."
             )
 
-    if "OMP_NUM_THREADS" not in os.environ:
-        logger.debug(
-            "[ray] Forcing OMP_NUM_THREADS=1 to avoid performance "
-            "degradation with many workers (issue #6998). You can "
-            "override this by explicitly setting OMP_NUM_THREADS."
-        )
-        os.environ["OMP_NUM_THREADS"] = "1"
-
     # Importing psutil & setproctitle. Must be before ray._raylet is
     # initialized.
     thirdparty_files = os.path.join(
@@ -115,7 +110,7 @@ __version__ = "3.0.0.dev0"
 
 import ray._raylet  # noqa: E402
 
-from ray._raylet import (  # noqa: E402
+from ray._raylet import (  # noqa: E402,F401
     ActorClassID,
     ActorID,
     NodeID,
@@ -134,7 +129,7 @@ from ray._raylet import (  # noqa: E402
 
 _config = _Config()
 
-from ray._private.state import (  # noqa: E402
+from ray._private.state import (  # noqa: E402,F401
     nodes,
     timeline,
     cluster_resources,
@@ -162,23 +157,20 @@ from ray._private.worker import (  # noqa: E402,F401
 # We import ray.actor because some code is run in actor.py which initializes
 # some functions in the worker.
 import ray.actor  # noqa: E402,F401
-from ray.actor import method  # noqa: E402
+from ray.actor import method  # noqa: E402,F401
 
 # TODO(qwang): We should remove this exporting in Ray2.0.
-from ray.cross_language import java_function, java_actor_class  # noqa: E402
-from ray.runtime_context import get_runtime_context  # noqa: E402
-from ray import autoscaler  # noqa:E402
-from ray import data  # noqa: E402,F401
+from ray.cross_language import java_function, java_actor_class  # noqa: E402,F401
+from ray.runtime_context import get_runtime_context  # noqa: E402,F401
 from ray import internal  # noqa: E402,F401
-from ray import util  # noqa: E402
+from ray import util  # noqa: E402,F401
 from ray import _private  # noqa: E402,F401
-from ray import workflow  # noqa: E402,F401
 
 # We import ClientBuilder so that modules can inherit from `ray.ClientBuilder`.
-from ray.client_builder import client, ClientBuilder  # noqa: E402
+from ray.client_builder import client, ClientBuilder  # noqa: E402,F401
 
 
-class _DeprecationWrapper(object):
+class _DeprecationWrapper:
     def __init__(self, name, real_worker):
         self._name = name
         self._real_worker = real_worker
@@ -201,23 +193,21 @@ ray_constants = _DeprecationWrapper("ray_constants", ray._private.ray_constants)
 serialization = _DeprecationWrapper("serialization", ray._private.serialization)
 state = _DeprecationWrapper("state", ray._private.state)
 
-__all__ = [
+
+RAY_APIS = {
     "__version__",
     "_config",
     "get_runtime_context",
-    "actor",
-    "available_resources",
     "autoscaler",
+    "available_resources",
     "cancel",
     "client",
     "ClientBuilder",
     "cluster_resources",
-    "data",
     "get",
     "get_actor",
     "get_gpu_ids",
     "init",
-    "internal",
     "is_initialized",
     "java_actor_class",
     "java_function",
@@ -231,12 +221,68 @@ __all__ = [
     "shutdown",
     "show_in_dashboard",
     "timeline",
-    "util",
     "wait",
-    "widgets",
     "LOCAL_MODE",
     "SCRIPT_MODE",
     "WORKER_MODE",
+}
+
+# Public APIs that should automatically trigger ray.init().
+AUTO_INIT_APIS = {
+    "cancel",
+    "get",
+    "get_actor",
+    "get_gpu_ids",
+    "kill",
+    "put",
+    "wait",
+    "get_runtime_context",
+}
+
+# Public APIs that should not automatically trigger ray.init().
+NON_AUTO_INIT_APIS = {
+    "ClientBuilder",
+    "LOCAL_MODE",
+    "Language",
+    "SCRIPT_MODE",
+    "WORKER_MODE",
+    "__version__",
+    "_config",
+    "autoscaler",
+    "available_resources",
+    "client",
+    "cluster_resources",
+    "cpp_function",
+    "init",
+    "is_initialized",
+    "java_actor_class",
+    "java_function",
+    "method",
+    "nodes",
+    "remote",
+    "show_in_dashboard",
+    "shutdown",
+    "timeline",
+}
+
+assert RAY_APIS == AUTO_INIT_APIS | NON_AUTO_INIT_APIS
+from ray._private.auto_init_hook import wrap_auto_init_for_all_apis  # noqa: E402
+
+wrap_auto_init_for_all_apis(AUTO_INIT_APIS)
+del wrap_auto_init_for_all_apis
+
+
+__all__ = list(RAY_APIS)
+
+# Subpackages
+__all__ += [
+    "actor",
+    "autoscaler",
+    "data",
+    "internal",
+    "util",
+    "widgets",
+    "workflow",
 ]
 
 # ID types
@@ -256,5 +302,15 @@ __all__ += [
 ]
 
 
+# Delay importing of expensive, isolated subpackages.
+def __getattr__(name: str):
+    import importlib
+
+    if name in ["data", "workflow", "autoscaler"]:
+        return importlib.import_module("." + name, __name__)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 del os
 del logging
+del sys

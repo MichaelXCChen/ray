@@ -1,10 +1,7 @@
-import asyncio
 import logging
+from ray._private.utils import get_or_create_event_loop
 
-try:
-    from packaging.version import Version
-except ImportError:
-    from distutils.version import LooseVersion as Version
+from packaging.version import Version
 
 import ray.dashboard.optional_utils as dashboard_optional_utils
 
@@ -26,7 +23,7 @@ class HttpServerAgent:
         # Create a http session for all modules.
         # aiohttp<4.0.0 uses a 'loop' variable, aiohttp>=4.0.0 doesn't anymore
         if Version(aiohttp.__version__) < Version("4.0.0"):
-            self.http_session = aiohttp.ClientSession(loop=asyncio.get_event_loop())
+            self.http_session = aiohttp.ClientSession(loop=get_or_create_event_loop())
         else:
             self.http_session = aiohttp.ClientSession()
 
@@ -84,3 +81,4 @@ class HttpServerAgent:
     async def cleanup(self):
         # Wait for finish signal.
         await self.runner.cleanup()
+        await self.http_session.close()
